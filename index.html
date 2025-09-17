@@ -69,7 +69,7 @@
     </div>
 
     <div class="status" id="status"></div>
-    <div class="hint">Free data: OpenStreetMap via Overpass (multi-mirrors). Only POIs with addr:*, anonymized names, BE/NL only.</div>
+    <div class="hint">OSM/Overpass (multi-mirrors). BE & NL only. Anonymized names. Only POIs with addr:* (no reverse).</div>
   </div>
 
   <div id="map"></div>
@@ -89,7 +89,7 @@
     const map = L.map('map').setView([50.85, 4.35], 6);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }).addTo(map);
 
-    let marker = null, circle = null, lastCityText = "", cancelRun = false;
+    let marker = null, circle = null;
 
     const cityInput   = document.getElementById('cityInput');
     const searchBtn   = document.getElementById('searchBtn');
@@ -117,20 +117,16 @@
     countSlider .addEventListener('input', () => { countValue.textContent  = countSlider.value; });
 
     // Select all / none
-    btnAll.addEventListener('click', () => {
-      typeChecks.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = true);
-    });
-    btnNone.addEventListener('click', () => {
-      typeChecks.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false);
-    });
+    btnAll.addEventListener('click', () => { typeChecks.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = true); });
+    btnNone.addEventListener('click', () => { typeChecks.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false); });
 
-    // City search just for centering
+    // City search just for centering (no country impact)
     async function searchCity(){
       const q = cityInput.value.trim(); if(!q){ alert("Please type a city."); return; }
       try{
         const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`);
         const data = await res.json();
-        if(data && data.length>0){ const lat=+data[0].lat, lon=+data[0].lon; setPoint([lat,lon]); lastCityText=q; }
+        if(data && data.length>0){ const lat=+data[0].lat, lon=+data[0].lon; setPoint([lat,lon]); }
         else alert("City not found. Click on the map instead.");
       }catch{ alert("Search failed. Click on the map instead."); }
     }
@@ -209,48 +205,13 @@
     }
     const nextCreativeName = makeUniqueNameDispenser();
 
-    // ---------- Country filter (BE & NL only) ----------
-    function normCountryTag(tags){
-      const raw = (tags["addr:country"] || tags["is_in:country_code"] || tags["country_code"] || tags["country"] || "").toString().trim().toUpperCase();
-      if (["BE","BEL","BELGIUM"].includes(raw)) return "BE";
-      if (["NL","NLD","NETHERLANDS","NEDERLAND"].includes(raw)) return "NL";
-      return "";
-    }
-    function inBelgiumBBox(lat, lon){ return lat>=49.45 && lat<=51.55 && lon>=2.5 && lon<=6.45; }
-    function inNetherlandsBBox(lat, lon){ return lat>=50.70 && lat<=53.70 && lon>=3.20 && lon<=7.25; }
-    function guessCountryFromPostcodeAndPos(postcode, lat, lon){
-      const pc = (postcode||"").toString().trim().toUpperCase();
-      const isNL = /^[1-9][0-9]{3}\s?[A-Z]{2}$/.test(pc);     // e.g., 1012AB or 1012 AB
-      const isBE = /^[1-9][0-9]{3}$/.test(pc);                // 1000–9999
-      if (isNL) return "NL";
-      if (isBE) return "BE";
-      // fallback by position if within bbox
-      if (inBelgiumBBox(lat,lon)) return "BE";
-      if (inNetherlandsBBox(lat,lon)) return "NL";
-      return "";
-    }
-    function isAllowedCountry(lat, lon, tags){
-      const tag = normCountryTag(tags);
-      if (tag==="BE" || tag==="NL") return true;
-      const pc = tags["addr:postcode"];
-      const g = guessCountryFromPostcodeAndPos(pc, lat, lon);
-      return g==="BE" || g==="NL";
-    }
-
-    // ---------- City extraction (robuste, multilingue, sans fallback forcé) ----------
+    // ---------- City extraction (robuste & multilingue) ----------
     function firstNonEmpty(tags, keys){
-      for (const k of keys){
-        const v = tags[k];
-        if (v && String(v).trim()) return String(v).trim();
-      }
+      for (const k of keys){ const v = tags[k]; if (v && String(v).trim()) return String(v).trim(); }
       return "";
     }
-    function multiLangKeys(base){
-      const langs = ["fr","nl","de","en"];
-      return [base, ...langs.map(l => `${base}:${l}`)];
-    }
+    function multiLangKeys(base){ const langs=["fr","nl","de","en"]; return [base, ...langs.map(l=>`${base}:${l}`)]; }
     function getCityFromTags(tags){
-      // Prefer municipality-level fields
       const candidates = [
         ...multiLangKeys("addr:city"),
         ...multiLangKeys("addr:town"),
@@ -269,31 +230,33 @@
     }
     function updateStatus(msg){ statusEl.textContent = msg; }
 
-    // --- Build & run Overpass queries (LIMIT + EARLY-STOP) ---
+    // --- Build & run Overpass queries (BE+NL areas, LIMIT, EARLY-STOP) ---
     function getSelectedTypes(){
       return Array.from(typeChecks.querySelectorAll("input[type=checkbox]"))
         .filter(cb => cb.checked).map(cb => cb.value);
     }
+
+    // Important: restriction par pays via areas ISO3166-1 (admin_level=2)
     function queryForKey(lat, lon, radiusMeters, key, limit){
       const R = Math.floor(radiusMeters);
       const LIM = Math.max(1, Math.min(300, limit|0));
-      if (key === "building") {
-        return `
-          [out:json][timeout:60];
-          (
-            nwr(around:${R},${lat},${lon})["building"~"^(retail|commercial|industrial)$"]["addr:street"]["addr:housenumber"];
-          );
-          out tags center qt ${LIM};
-        `;
-      }
+      const addrFilter = '["addr:street"]["addr:housenumber"]';
+      const keyFilter  = key === "building"
+        ? '["building"~"^(retail|commercial|industrial)$"]'
+        : `["${key}"]`;
+
       return `
-        [out:json][timeout:60];
-        (
-          nwr(around:${R},${lat},${lon})["${key}"]["addr:street"]["addr:housenumber"];
-        );
-        out tags center qt ${LIM};
+[out:json][timeout:60];
+area["ISO3166-1"="BE"][admin_level=2]->.be;
+area["ISO3166-1"="NL"][admin_level=2]->.nl;
+(
+  nwr(area.be)(around:${R},${lat},${lon})${keyFilter}${addrFilter};
+  nwr(area.nl)(around:${R},${lat},${lon})${keyFilter}${addrFilter};
+);
+out tags center qt ${LIM};
       `;
     }
+
     async function overpassCall(query){
       const body = "data=" + encodeURIComponent(query);
       let lastErr;
@@ -310,6 +273,7 @@
       }
       throw lastErr || new Error("All Overpass mirrors failed");
     }
+
     async function fetchPois(center, radiusMeters, selectedTypes, target){
       const { lat, lng } = center;
       const results = [];
@@ -335,12 +299,9 @@
             if (seen.has(id)) continue;
 
             const tags = el.tags || {};
-            if (!isAllowedCountry(y, x, tags)) continue; // 🇧🇪🇳🇱 only
-
+            // garde: vérifier quand même street/number
             const street = tags["addr:street"] || "";
             const number = tags["addr:housenumber"] || "";
-            const postal = tags["addr:postcode"] || "";
-            // require street & number; postal optional
             if (!street || !number) continue;
 
             seen.add(id);
@@ -382,17 +343,12 @@
     }
 
     // --- Main action (CSV: anonymized Name + address only) ---
-    function toCsv(rows){
-      const esc=v=>{ const s=String(v??""); return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; };
-      return rows.map(r=>r.map(esc).join(",")).join("\n");
-    }
-
     magicBtn.addEventListener('click', async () => {
       if (!marker) { alert("Please select a point first (click the map or search a city)."); return; }
 
       magicBtn.disabled = true;
       magicBtn.textContent = "Working… 🧠";
-      updateStatus("Querying places with addresses…");
+      updateStatus("Querying BE + NL places with addresses…");
 
       try {
         const center = marker.getLatLng();
@@ -409,17 +365,19 @@
         }
 
         const rows = [["Business Name","Street","Number","Postal Code","City"]];
+        const nextName = makeUniqueNameDispenser(); // ensure unique even cross-sector
         for (const p of source.slice(0, target)) {
           const tags = p.tags || {};
           const sector = sectorFromTags(tags);
-          const fakeName = nextCreativeName(sector);
+          const fakeName = nextCreativeName(sector); // creative & varied
+          const uniqName = nextName(fakeName);       // force uniqueness
 
           const street = tags["addr:street"] || "";
           const number = tags["addr:housenumber"] || "";
           const postal = tags["addr:postcode"] || "";
-          const city   = getCityFromTags(tags); // robust, multilanguage
+          const city   = getCityFromTags(tags);
 
-          rows.push([fakeName, street, number, postal, city]);
+          rows.push([uniqName, street, number, postal, city]);
         }
 
         const csv = toCsv(rows);
@@ -432,7 +390,7 @@
 
         updateStatus(`Done. Exported ${rows.length - 1} addresses.`);
         if (source.length < target) {
-          alert(`Only ${source.length} addresses found within BE/NL (requested ${target}). Increase radius or select more types.`);
+          alert(`Only ${rows.length - 1} addresses found within BE/NL (requested ${target}). Increase radius or select more types.`);
         }
 
       } catch (err) {
@@ -444,6 +402,20 @@
         magicBtn.textContent = "Let's do the magic !";
       }
     });
+
+    // --- Unique name wrapper (suffix if collision) ---
+    function makeUniqueNameDispenser(){
+      const used = new Set();
+      return function(uniqueBase){
+        let name = uniqueBase, i = 2;
+        while(used.has(name)){
+          name = uniqueBase + " " + i + " " + pick(["Ltd.","Inc.","Co.","Group","Studio","Works"]);
+          i++;
+        }
+        used.add(name);
+        return name;
+      };
+    }
   </script>
 </body>
 </html>
