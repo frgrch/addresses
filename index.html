@@ -65,24 +65,27 @@
     </div>
 
     <div class="status" id="status"></div>
-    <div class="hint">Free data: OpenStreetMap via Overpass. No API key. We avoid reverse-geocoding to stay within fair-use.</div>
+    <div class="hint">Free data: OpenStreetMap via Overpass (multi-mirrors). We only use POIs that already have addr:*, no reverse geocoding.</div>
   </div>
 
   <div id="map"></div>
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script>
-    // ---------- Overpass mirrors (rotate on failure) ----------
+    // ---------- Overpass mirrors (rotated on failure) ----------
     const OVERPASS_ENDPOINTS = [
-      "https://overpass-api.de/api/interpreter",
       "https://overpass.kumi.systems/api/interpreter",
-      "https://overpass.openstreetmap.ru/api/interpreter"
-      // (FR mirror est souvent instable)
+      "https://overpass-api.de/api/interpreter",
+      "https://overpass.openstreetmap.ru/api/interpreter",
+      "https://overpass.nchc.org.tw/api/interpreter",
+      "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
     ];
 
     // ---------- Map init ----------
-    const map = L.map('map').setView([50.85, 4.35], 6);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }).addTo(map);
+    const map = L.map('map').setView([50.85, 4.35], 6); // Brussels default
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
 
     let marker = null, circle = null, lastCityText = "";
 
@@ -169,36 +172,35 @@
     }
     function updateStatus(msg){ statusEl.textContent = msg; }
 
-    // ---------- Build Overpass query (ONLY POI with addr:*) ----------
+    // ---------- Build & run Overpass queries (ONLY with addr:*) ----------
     function getSelectedTypes(){
       return Array.from(typeChecks.querySelectorAll("input[type=checkbox]"))
         .filter(cb => cb.checked).map(cb => cb.value);
     }
-    function buildOverpassQuery(lat, lon, radiusMeters, selected) {
-      const parts = [];
-      const simpleKeys = ["shop","amenity","office","craft","tourism","leisure","healthcare","industrial"];
-      for (const key of selected) {
-        if (simpleKeys.includes(key)) {
-          // keep only features that already carry an address
-          parts.push(`nwr(around:${Math.floor(radiusMeters)},${lat},${lon})["${key}"]["addr:street"]["addr:housenumber"]`);
-        }
-      }
-      if (selected.includes("building")) {
-        parts.push(`nwr(around:${Math.floor(radiusMeters)},${lat},${lon})["building"~"^(retail|commercial|industrial)$"]["addr:street"]["addr:housenumber"]`);
-      }
-      // if everything is unchecked, fallback to shop with addr
-      if (!parts.length) parts.push(`nwr(around:${Math.floor(radiusMeters)},${lat},${lon})["shop"]["addr:street"]["addr:housenumber"]`);
 
+    // One-key query (shop/amenity/office/..., or building with regex)
+    function queryForKey(lat, lon, radiusMeters, key){
+      const R = Math.floor(radiusMeters);
+      if (key === "building") {
+        return `
+          [out:json][timeout:60];
+          (
+            nwr(around:${R},${lat},${lon})["building"~"^(retail|commercial|industrial)$"]["addr:street"]["addr:housenumber"];
+          );
+          out tags center qt;
+        `;
+      }
       return `
-        [out:json][timeout:30];
+        [out:json][timeout:60];
         (
-          ${parts.join(";\n")}
+          nwr(around:${R},${lat},${lon})["${key}"]["addr:street"]["addr:housenumber"];
         );
-        out tags center;
+        out tags center qt;
       `;
     }
 
-    async function overpassFetchWithMirrors(bodyEncoded){
+    async function overpassCall(query){
+      const body = "data=" + encodeURIComponent(query);
       let lastErr;
       for (let i=0;i<OVERPASS_ENDPOINTS.length;i++){
         const ep = OVERPASS_ENDPOINTS[i];
@@ -206,31 +208,52 @@
           const res = await fetch(ep, {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-            body: "data=" + bodyEncoded
+            body
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const json = await res.json();
-          return json;
+          return await res.json();
         }catch(e){
           lastErr = e;
-          // petit backoff progressif
-          await new Promise(r => setTimeout(r, 400 * (i+1)));
+          // progressive backoff between mirrors
+          await new Promise(r => setTimeout(r, 500 * (i+1)));
         }
       }
       throw lastErr || new Error("All Overpass mirrors failed");
     }
 
-    async function fetchPois(center, radiusMeters, selectedTypes) {
+    // Fetch sequentially by key; stop early when we have enough
+    async function fetchPois(center, radiusMeters, selectedTypes, target=200){
       const { lat, lng } = center;
-      const query = buildOverpassQuery(lat, lng, radiusMeters, selectedTypes);
-      const data = await overpassFetchWithMirrors(encodeURIComponent(query));
-      const elements = data.elements || [];
-      return elements.map(el => {
-        const lat = el.lat || (el.center && el.center.lat);
-        const lon = el.lon || (el.center && el.center.lon);
-        const tags = el.tags || {};
-        return (lat && lon) ? { lat, lon, tags } : null;
-      }).filter(Boolean);
+      const results = [];
+      const seen = new Set();
+
+      // Keys in a productive order
+      const order = ["shop","amenity","office","building","craft","leisure","tourism","healthcare","industrial"];
+      const keys = order.filter(k => selectedTypes.includes(k)).concat(
+        selectedTypes.filter(k => !order.includes(k))
+      );
+
+      for (const key of keys){
+        const q = queryForKey(lat, lng, radiusMeters, key);
+        try{
+          const data = await overpassCall(q);
+          for (const el of (data.elements || [])){
+            const y = el.lat || el.center?.lat;
+            const x = el.lon || el.center?.lon;
+            if (!y || !x) continue;
+            const id = `${el.type || 'x'}:${el.id || 'x'}`;
+            if (seen.has(id)) continue;
+            seen.add(id);
+            results.push({ lat: y, lon: x, tags: el.tags || {} });
+            if (results.length >= target) return results;
+          }
+        }catch(e){
+          console.warn("Overpass error on key", key, e);
+        }
+        // small pause between keys to be nice with servers
+        await new Promise(r => setTimeout(r, 300));
+      }
+      return results;
     }
 
     function sampleArray(arr, n){
@@ -243,7 +266,7 @@
       return res;
     }
 
-    // ---------- Action ----------
+    // ---------- Main action ----------
     magicBtn.addEventListener('click', async () => {
       if (!marker) { alert("Please select a point first (click the map or search a city)."); return; }
 
@@ -257,22 +280,26 @@
         const target = parseInt(countSlider.value, 10);
         const selectedTypes = getSelectedTypes();
 
-        const pois = await fetchPois(center, radiusMeters, selectedTypes);
-        if (!pois.length) {
+        // 1) Fetch POIs (sequential per key, stop early)
+        const source = await fetchPois(center, radiusMeters, selectedTypes, target);
+
+        if (!source.length) {
           updateStatus("No places with explicit addresses found here.");
           alert("No places with explicit addresses found. Try a larger radius or different types.");
           return;
         }
 
-        const picked = sampleArray(pois, Math.min(target, pois.length));
-        updateStatus(`Found ${pois.length} places. Preparing ${picked.length} addresses…`);
+        // 2) If more than needed (can happen), sample down
+        const picked = sampleArray(source, Math.min(target, source.length));
+        updateStatus(`Found ${source.length} places. Preparing ${picked.length} addresses…`);
 
+        // 3) Build CSV with unique fake names
         const uniqueName = makeUniqueNameGenerator();
         const rows = [["Business Name","Street","Number","Postal Code","City","Latitude","Longitude"]];
 
         for (const p of picked) {
           const sector = sectorFromTags(p.tags);
-          const fakeName = uniqueName(fakeBusinessName(sector));
+          const fakeName = uniqueName( fakeBusinessName(sector) );
           const addr = {
             street: p.tags["addr:street"] || "",
             number: p.tags["addr:housenumber"] || "",
@@ -285,6 +312,7 @@
           ]);
         }
 
+        // 4) Download CSV
         updateStatus("Generating CSV…");
         const csv = toCsv(rows);
         const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -298,10 +326,11 @@
         if (picked.length < target) {
           alert(`Only ${picked.length} places with full addresses found (requested ${target}). Increase radius or select more types.`);
         }
+
       } catch (err) {
         console.error(err);
         updateStatus("Error while fetching addresses.");
-        alert("Overpass seems busy or blocked. Try again, increase radius, or run from a local server (see tip above).");
+        alert("Overpass seems busy or blocked. Please retry, change types, or increase the radius.");
       } finally {
         magicBtn.disabled = false;
         magicBtn.textContent = "Let's do the magic !";
