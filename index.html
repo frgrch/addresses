@@ -69,7 +69,7 @@
     </div>
 
     <div class="status" id="status"></div>
-    <div class="hint">OSM/Overpass (multi-mirrors). BE & NL only. Anonymized names. Only POIs with addr:* (no reverse).</div>
+    <div class="hint">OSM/Overpass (multi-mirrors). Belgium & Netherlands only. Valid postcodes required. Anonymized names.</div>
   </div>
 
   <div id="map"></div>
@@ -120,7 +120,7 @@
     btnAll.addEventListener('click', () => { typeChecks.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = true); });
     btnNone.addEventListener('click', () => { typeChecks.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false); });
 
-    // City search just for centering (no country impact)
+    // City search just for centering
     async function searchCity(){
       const q = cityInput.value.trim(); if(!q){ alert("Please type a city."); return; }
       try{
@@ -223,6 +223,14 @@
       return firstNonEmpty(tags, candidates);
     }
 
+    // ---------- Postcode validation (BE & NL only) ----------
+    function isValidPostcodeBE(pc){ return /^[1-9][0-9]{3}$/.test(pc); } // 1000–9999
+    function isValidPostcodeNL(pc){ return /^[1-9][0-9]{3}\s?[A-Z]{2}$/.test(pc); } // 1012AB or 1012 AB
+    function isValidBENLPostcode(pc){
+      const x = (pc || "").toString().trim().toUpperCase();
+      return isValidPostcodeBE(x) || isValidPostcodeNL(x);
+    }
+
     // --- CSV helper
     function toCsv(rows){
       const esc=v=>{ const s=String(v??""); return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; };
@@ -236,11 +244,11 @@
         .filter(cb => cb.checked).map(cb => cb.value);
     }
 
-    // Important: restriction par pays via areas ISO3166-1 (admin_level=2)
+    // Overpass: restrict to Belgium & Netherlands via areas + require addr:street, housenumber, postcode
     function queryForKey(lat, lon, radiusMeters, key, limit){
       const R = Math.floor(radiusMeters);
       const LIM = Math.max(1, Math.min(300, limit|0));
-      const addrFilter = '["addr:street"]["addr:housenumber"]';
+      const addrFilter = '["addr:street"]["addr:housenumber"]["addr:postcode"]';
       const keyFilter  = key === "building"
         ? '["building"~"^(retail|commercial|industrial)$"]'
         : `["${key}"]`;
@@ -299,10 +307,13 @@ out tags center qt ${LIM};
             if (seen.has(id)) continue;
 
             const tags = el.tags || {};
-            // garde: vérifier quand même street/number
             const street = tags["addr:street"] || "";
             const number = tags["addr:housenumber"] || "";
-            if (!street || !number) continue;
+            const postal = (tags["addr:postcode"] || "").toString().trim().toUpperCase();
+
+            // require full address + valid BE/NL postcode
+            if (!street || !number || !postal) continue;
+            if (!isValidBENLPostcode(postal)) continue;
 
             seen.add(id);
             results.push({ lat: y, lon: x, tags });
@@ -348,7 +359,7 @@ out tags center qt ${LIM};
 
       magicBtn.disabled = true;
       magicBtn.textContent = "Working… 🧠";
-      updateStatus("Querying BE + NL places with addresses…");
+      updateStatus("Querying BE + NL places with valid postcodes…");
 
       try {
         const center = marker.getLatLng();
@@ -359,25 +370,25 @@ out tags center qt ${LIM};
         const source = await fetchPois(center, radiusMeters, selectedTypes, target);
 
         if (!source.length) {
-          updateStatus("No BE/NL places with explicit addresses found here.");
-          alert("No places found (BE/NL with full addresses). Try a larger radius or different types.");
+          updateStatus("No BE/NL places with valid postcodes found here.");
+          alert("No places found (BE/NL with valid postcodes). Try a larger radius or different types.");
           return;
         }
 
         const rows = [["Business Name","Street","Number","Postal Code","City"]];
-        const nextName = makeUniqueNameDispenser(); // ensure unique even cross-sector
+        const uniqueName = makeUniqueNameDispenser(); // ensures global uniqueness
         for (const p of source.slice(0, target)) {
           const tags = p.tags || {};
           const sector = sectorFromTags(tags);
-          const fakeName = nextCreativeName(sector); // creative & varied
-          const uniqName = nextName(fakeName);       // force uniqueness
+          const fakeName = nextCreativeName(sector);
+          const name = uniqueName(fakeName);
 
           const street = tags["addr:street"] || "";
           const number = tags["addr:housenumber"] || "";
-          const postal = tags["addr:postcode"] || "";
+          const postal = (tags["addr:postcode"] || "").toString().trim().toUpperCase();
           const city   = getCityFromTags(tags);
 
-          rows.push([uniqName, street, number, postal, city]);
+          rows.push([name, street, number, postal, city]);
         }
 
         const csv = toCsv(rows);
@@ -390,7 +401,7 @@ out tags center qt ${LIM};
 
         updateStatus(`Done. Exported ${rows.length - 1} addresses.`);
         if (source.length < target) {
-          alert(`Only ${rows.length - 1} addresses found within BE/NL (requested ${target}). Increase radius or select more types.`);
+          alert(`Only ${rows.length - 1} addresses found with valid BE/NL postcodes (requested ${target}). Try increasing radius or selecting more types.`);
         }
 
       } catch (err) {
