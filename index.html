@@ -137,91 +137,7 @@
     searchBtn.addEventListener('click', searchCity);
     cityInput.addEventListener('keydown', e => { if(e.key==='Enter') searchCity(); });
 
-    // --- Creative Names Engine ------------------------------------------------
-    const SUFFIXES = ["Ltd.","Inc.","Co.","Group","Studio","Works","Collective","Company","House","Lab","Atelier"];
-    const ANIMALS  = ["Fox","Bear","Wolf","Otter","Hawk","Sparrow","Raven","Falcon","Deer","Bison","Lynx","Badger","Hare","Bee","Wasp","Crane","Heron","Puffin","Seal","Dolphin"];
-    const NUMWORDS = ["Two","Three","Five","Seven","Nine","Twelve","Fifteen","Twenty"];
-    const COLORS   = ["Blue","Green","Crimson","Amber","Ivory","Indigo","Golden","Silver","Copper","Emerald","Azure","Scarlet","Violet","Teal","Cobalt"];
-    const QUALS    = ["Urban","Northern","Grand","Quiet","Happy","Sunny","Clever","Brisk","Rapid","Mighty","Honest","True","Brave","Nimble","Prime"];
-
-    // Sector-specific lexicons (cores + alt suffixes)
-    const LEX = {
-      "Bakery": { cores:["Loaf","Crust","Oven","Pastry","Brioche","Bagel","Bakehouse","Bun","Mill","Flour","Yeast","Butter","Crumble","Croissant","Cracker"], ends:["Bakery","Bakehouse","Patisserie"] },
-      "Bike Shop": { cores:["Cycle","Wheel","Spoke","Chain","Sprocket","Pedal","Frame","Saddle","Gear","Velodrome","Cruiser","Fixie","Trail","Gravel","Hub"], ends:["Cycles","Bicycles","Bike Co."] },
-      "Bookstore": { cores:["Page","Chapter","Quill","Scroll","Library","Archive","Tome","Novel","Fable","Ink","Bookmark","Shelf","Edition","Folio","Volume"], ends:["Books","Bookshop","Press"] },
-      "Pharmacy": { cores:["Health","Remedy","Cure","Vial","Herb","Pill","Care","Vital","Wellness","Apothecary","Hygieia","Ointment","Serum","Dose","Clinic"], ends:["Pharmacy","Apothecary","Health"] },
-      "Tech Store": { cores:["Pixel","Circuit","Quantum","Logic","Byte","Chip","Matrix","Vector","Nova","Photon","Cloud","Kernel","Server","Console","Module"], ends:["Labs","Tech","Systems"] },
-      "Restaurant": { cores:["Fork","Spoon","Skillet","Grill","Flame","Garden","Olive","Basil","Harvest","Pantry","Table","Cellar","Spice","Smoke","Ember"], ends:["Kitchen","Bistro","Table"] },
-      "Bar": { cores:["Taproom","Barrel","Malt","Hop","Cask","Cellar","Stout","Ale","Wine","Tavern","Moon","Oak","Spirit","Lime","Salt"], ends:["Bar","Tavern","Club"] },
-      "Gym": { cores:["Muscle","Core","Pulse","Sprint","Power","Iron","Fit","Motion","Tempo","Zen","Focus","Arena","Peak","Summit","Forge"], ends:["Gym","Fitness","Athletics"] },
-      "Music Shop": { cores:["Note","Chord","Melody","Rhythm","Groove","Harmony","Lyric","Tempo","Beat","Vibe","Record","Vinyl","Guitar","Piano","Drum"], ends:["Music","Records","Sound"] },
-      "Clothing": { cores:["Thread","Loom","Needle","Silk","Denim","Wool","Cotton","Wardrobe","Closet","Button","Pattern","Tailor","Stitch","Hem","Lace"], ends:["Apparel","Outfitters","Clothiers"] },
-      "Workshop": { cores:["Workbench","Anvil","Forge","Hammer","Lathe","Chisel","Timber","Joinery","Panel","Resin","Fiber","Craft","Toolbox","Bench","Workshop"], ends:["Works","Atelier","Fabrication"] },
-      "Hotel": { cores:["Harbor","Harbour","Vista","Garden","Cedar","Maple","Riverside","Lakeside","Hilltop","Crescent","Orchid","Aurora","Lagoon","Beacon","Lodge"], ends:["Hotel","Inn","Suites"] },
-      "Leisure": { cores:["Arcade","Arena","Park","Playhouse","Meadow","Pavilion","Carousel","Bowling","Cinema","Skate","Rink","Lagoon","Pier","Boardwalk","Aquarium"], ends:["Leisure","Center","Park"] },
-      "Industrial": { cores:["Steel","Foundry","Alloy","Forge","Engine","Turbine","Assembly","Terminal","Depot","Pipeline","Granite","Atlas","Crane","Anchor","Harbor"], ends:["Industries","Works","Plant"] },
-      "Office": { cores:["Summit","Bridge","Harbor","Axis","Vista","Prime","Union","Pioneer","Anchor","Beacon","Cedar","Maple","Elm","Orchard","Sterling"], ends:["Office","Partners","Group"] },
-      "Business": { cores:["Corner","Market","Square","Harbor","Harbour","Union","Central","Prime","Anchor","Bridge","Compass","Atlas","Pioneer","Crown","Crescent"], ends:["Company","Group","Co."] }
-    };
-
-    // Create 100 creative names per sector with patterns, then shuffle
-    const NAME_POOLS = {};
-    function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
-    function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
-
-    function generatePoolFor(sector, target=100){
-      const spec = LEX[sector] || LEX["Business"];
-      const out = new Set();
-      while(out.size < target){
-        const form = Math.floor(Math.random()*6); // 6 patterns
-        const adj = pick([...COLORS, ...QUALS]);
-        const animal = pick(ANIMALS);
-        const core1 = pick(spec.cores);
-        const core2 = pick(spec.cores.filter(c => c!==core1));
-        const end = pick(spec.ends);
-        const num = pick(NUMWORDS);
-
-        let name = "";
-        switch(form){
-          case 0: name = `${adj} ${core1} ${end}`; break;
-          case 1: name = `${animal} ${core1} ${end}`; break;
-          case 2: name = `${num} ${core1} ${end}`; break;
-          case 3: name = `${core1} & ${core2} ${end}`; break;
-          case 4: name = `${adj} ${animal} ${core1} ${end}`; break;
-          case 5: name = `${core1} ${adj} ${end}`; break;
-        }
-        out.add(name.replace(/\s+/g,' ').trim());
-      }
-      return shuffle([...out]);
-    }
-    function getNamePool(sector){
-      if(!NAME_POOLS[sector]) NAME_POOLS[sector] = generatePoolFor(sector, 100);
-      return NAME_POOLS[sector];
-    }
-
-    // Unique name dispenser (global uniqueness across sectors)
-    function makeUniqueNameDispenser(){
-      const used = new Set();
-      return function nextName(sector){
-        const pool = getNamePool(sector);
-        while(pool.length){
-          const n = pool.pop();
-          if(!used.has(n)){ used.add(n); return n; }
-        }
-        // Pool exhausted: fallback to combinatorial + suffix
-        let base = `${pick(COLORS)} ${pick(LEX[sector]?.cores || LEX["Business"].cores)} ${pick(LEX[sector]?.ends || LEX["Business"].ends)}`;
-        let i=2, candidate=base;
-        while(used.has(candidate)){
-          candidate = `${base} ${i} ${pick(SUFFIXES)}`;
-          i++;
-        }
-        used.add(candidate);
-        return candidate;
-      };
-    }
-    const nextCreativeName = makeUniqueNameDispenser();
-
-    // --- Helpers (CSV, etc.) -----------------------------------------------
+    // --- CSV helper
     function toCsv(rows){
       const esc=v=>{ const s=String(v??""); return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; };
       return rows.map(r=>r.map(esc).join(",")).join("\n");
@@ -233,6 +149,7 @@
       return Array.from(typeChecks.querySelectorAll("input[type=checkbox]"))
         .filter(cb => cb.checked).map(cb => cb.value);
     }
+
     function queryForKey(lat, lon, radiusMeters, key, limit){
       const R = Math.floor(radiusMeters);
       const LIM = Math.max(1, Math.min(300, limit|0));
@@ -253,13 +170,18 @@
         out tags center qt ${LIM};
       `;
     }
+
     async function overpassCall(query){
       const body = "data=" + encodeURIComponent(query);
       let lastErr;
       for (let i=0;i<OVERPASS_ENDPOINTS.length;i++){
         const ep = OVERPASS_ENDPOINTS[i];
         try{
-          const res = await fetch(ep, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" }, body });
+          const res = await fetch(ep, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+            body
+          });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           return await res.json();
         }catch(e){
@@ -269,6 +191,7 @@
       }
       throw lastErr || new Error("All Overpass mirrors failed");
     }
+
     async function fetchPois(center, radiusMeters, selectedTypes, target){
       const { lat, lng } = center;
       const results = [];
@@ -277,7 +200,6 @@
       const keys = order.filter(k => selectedTypes.includes(k)).concat(selectedTypes.filter(k => !order.includes(k)));
 
       for (const key of keys){
-        if (cancelRun) break;
         const remaining = Math.max(0, target - results.length);
         if (remaining === 0) break;
 
@@ -287,7 +209,6 @@
         try{
           const data = await overpassCall(q);
           for (const el of (data.elements || [])){
-            if (cancelRun) break;
             const y = el.lat || el.center?.lat;
             const x = el.lon || el.center?.lon;
             if (!y || !x) continue;
@@ -296,7 +217,7 @@
             seen.add(id);
             results.push({ lat: y, lon: x, tags: el.tags || {} });
             updateStatus(`Collected ${results.length} / ${target}…`);
-            if (results.length >= target) return results; // EARLY STOP
+            if (results.length >= target) return results; // early stop
           }
         }catch(e){
           console.warn("Overpass error on key", key, e);
@@ -306,46 +227,10 @@
       return results;
     }
 
-    // --- Sector from tags (for name lexicon selection) ----------------------
-    function sectorFromTags(tags = {}) {
-      const t = (s) => (s || "").toLowerCase();
-      const shop = t(tags.shop), amen = t(tags.amenity), office = t(tags.office), craft = t(tags.craft),
-            tourism = t(tags.tourism), leisure = t(tags.leisure), healthcare = t(tags.healthcare),
-            industrial = t(tags.industrial), building = t(tags.building);
-      if (["bakery","confectionery","pastry"].includes(shop)) return "Bakery";
-      if (["bicycle"].includes(shop)) return "Bike Shop";
-      if (["books","stationery"].includes(shop)) return "Bookstore";
-      if (["pharmacy"].includes(shop) || amen==="pharmacy" || healthcare) return "Pharmacy";
-      if (["computer","electronics","mobile_phone"].includes(shop)) return "Tech Store";
-      if (["restaurant","fast_food","cafe"].includes(amen)) return "Restaurant";
-      if (["bar","pub","biergarten"].includes(amen)) return "Bar";
-      if (["fitness_centre","gym"].includes(amen)) return "Gym";
-      if (["music","musical_instrument"].includes(shop)) return "Music Shop";
-      if (["clothes","fashion_accessories","shoes"].includes(shop)) return "Clothing";
-      if (craft) return "Workshop";
-      if (tourism) return "Hotel";
-      if (leisure) return "Leisure";
-      if (industrial) return "Industrial";
-      if (["retail","commercial","industrial"].includes(building)) return "Business";
-      if (office) return "Office";
-      return "Business";
-    }
-
-    function sampleArray(arr, n){
-      if (arr.length <= n) return [...arr];
-      const res=[]; const used = new Set();
-      while(res.length<n){
-        const i = Math.floor(Math.random()*arr.length);
-        if(!used.has(i)){ used.add(i); res.push(arr[i]); }
-      }
-      return res;
-    }
-
     // --- Main action --------------------------------------------------------
     magicBtn.addEventListener('click', async () => {
       if (!marker) { alert("Please select a point first (click the map or search a city)."); return; }
 
-      cancelRun = false;
       magicBtn.disabled = true;
       magicBtn.textContent = "Working… 🧠";
       updateStatus("Querying places with addresses…");
@@ -364,23 +249,16 @@
           return;
         }
 
-        const picked = sampleArray(source, Math.min(target, source.length));
-        updateStatus(`Preparing ${picked.length} addresses…`);
-
-        const rows = [["Business Name","Street","Number","Postal Code","City","Latitude","Longitude"]];
-        for (const p of picked) {
-          const sector = sectorFromTags(p.tags);
-          const fakeName = nextCreativeName(sector);
-          const addr = {
-            street: p.tags["addr:street"] || "",
-            number: p.tags["addr:housenumber"] || "",
-            postal: p.tags["addr:postcode"] || "",
-            city:   p.tags["addr:city"] || lastCityText || ""
-          };
-          rows.push([
-            fakeName, addr.street, addr.number, addr.postal, addr.city,
-            (+p.lat).toFixed(6), (+p.lon).toFixed(6)
-          ]);
+        // Build CSV (Name + address only)
+        const rows = [["Name","Street","Number","Postal Code","City"]];
+        for (const p of source.slice(0, target)) {
+          const tags = p.tags || {};
+          const name = tags.name || tags.brand || "Unknown";
+          const street = tags["addr:street"] || "";
+          const number = tags["addr:housenumber"] || "";
+          const postal = tags["addr:postcode"] || "";
+          const city   = tags["addr:city"] || lastCityText || "";
+          rows.push([name, street, number, postal, city]);
         }
 
         const csv = toCsv(rows);
@@ -392,8 +270,8 @@
         URL.revokeObjectURL(url);
 
         updateStatus(`Done. Exported ${rows.length - 1} addresses.`);
-        if (picked.length < target) {
-          alert(`Only ${picked.length} places with full addresses found (requested ${target}). Increase radius or select more types.`);
+        if (source.length < target) {
+          alert(`Only ${source.length} places with full addresses found (requested ${target}). Increase radius or select more types.`);
         }
 
       } catch (err) {
@@ -403,7 +281,6 @@
       } finally {
         magicBtn.disabled = false;
         magicBtn.textContent = "Let's do the magic !";
-        cancelRun = false;
       }
     });
   </script>
