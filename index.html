@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Magic Address Finder</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    body { font-family: Arial, sans-serif; margin:0; }
+    #map { height: 460px; }
+    .controls { padding:12px; display:grid; gap:10px; background:#f7f7f9; border-bottom:1px solid #e5e5ef; }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .row.wrap { align-items:flex-start; }
+    label { font-weight:600; }
+    input[type=text]{ padding:8px; min-width:260px; }
+    input[type=range]{ width:280px; }
+    .value{ font-weight:700; margin-left:6px; min-width:40px; text-align:right; }
+    button{ padding:10px 16px; font-size:16px; cursor:pointer; border-radius:8px; border:1px solid #cfd2dc; background:white; }
+    button:hover{ background:#f0f2f7; }
+    .hint{ font-size:12px; color:#666; }
+    .status { font-size:12px; color:#333; }
+    .checkboxes { display:grid; grid-template-columns:repeat(4,minmax(140px,1fr)); gap:6px 16px; }
+    .checkboxes label { font-weight:500; display:flex; gap:6px; align-items:center; }
+    .section-title { font-weight:700; margin-right:6px; }
+  </style>
+</head>
+<body>
+  <div class="controls">
+    <div class="row">
+      <label for="cityInput">Search for a city:</label>
+      <input type="text" id="cityInput" placeholder="Type a city..." />
+      <button id="searchBtn">Search</button>
+      <span class="hint">Tip: you can also click the map to set the point.</span>
+    </div>
+
+    <div class="row">
+      <label for="radiusSlider">Radius (km):</label>
+      <input type="range" id="radiusSlider" min="10" max="200" step="5" value="50" />
+      <span class="value" id="radiusValue">50</span>
+    </div>
+
+    <div class="row">
+      <label for="countSlider">Number of addresses:</label>
+      <input type="range" id="countSlider" min="5" max="600" step="5" value="50" />
+      <span class="value" id="countValue">50</span>
+    </div>
+
+    <div class="row wrap">
+      <span class="section-title">Types:</span>
+      <div class="checkboxes" id="typeChecks">
+        <!-- All checked by default -->
+        <label><input type="checkbox" value="shop" checked />shop</label>
+        <label><input type="checkbox" value="amenity" checked />amenity</label>
+        <label><input type="checkbox" value="office" checked />office</label>
+        <label><input type="checkbox" value="craft" checked />craft</label>
+        <label><input type="checkbox" value="tourism" checked />tourism</label>
+        <label><input type="checkbox" value="leisure" checked />leisure</label>
+        <label><input type="checkbox" value="healthcare" checked />healthcare</label>
+        <label><input type="checkbox" value="industrial" checked />industrial</label>
+        <label><input type="checkbox" value="building" checked />building (retail/commercial/industrial)</label>
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="magicBtn">Let's do the magic !</button>
+    </div>
+
+    <div class="status" id="status"></div>
+    <div class="hint">Free data: OpenStreetMap via Overpass. No API key. We avoid reverse-geocoding to stay within fair-use.</div>
+  </div>
+
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script>
+    // ---------- Overpass mirrors (rotate on failure) ----------
+    const OVERPASS_ENDPOINTS = [
+      "https://overpass-api.de/api/interpreter",
+      "https://overpass.kumi.systems/api/interpreter",
+      "https://overpass.openstreetmap.ru/api/interpreter"
+      // (FR mirror est souvent instable)
+    ];
+
+    // ---------- Map init ----------
+    const map = L.map('map').setView([50.85, 4.35], 6);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }).addTo(map);
+
+    let marker = null, circle = null, lastCityText = "";
+
+    const cityInput   = document.getElementById('cityInput');
+    const searchBtn   = document.getElementById('searchBtn');
+    const radiusSlider= document.getElementById('radiusSlider');
+    const radiusValue = document.getElementById('radiusValue');
+    const countSlider = document.getElementById('countSlider');
+    const countValue  = document.getElementById('countValue');
+    const magicBtn    = document.getElementById('magicBtn');
+    const statusEl    = document.getElementById('status');
+    const typeChecks  = document.getElementById('typeChecks');
+
+    const kmToMeters = km => km * 1000;
+
+    function drawCircle(centerLatLng) {
+      const radiusMeters = kmToMeters(parseInt(radiusSlider.value, 10));
+      if (circle) circle.remove();
+      circle = L.circle(centerLatLng, { radius: radiusMeters, color: "#2563eb", fillOpacity: 0.08 }).addTo(map);
+      map.fitBounds(circle.getBounds(), { padding: [20,20] });
+    }
+    function setPoint(latlng){ if (marker) marker.remove(); marker = L.marker(latlng).addTo(map); drawCircle(latlng); }
+    map.on('click', e => setPoint(e.latlng));
+    radiusSlider.addEventListener('input', () => { radiusValue.textContent = radiusSlider.value; if (marker) drawCircle(marker.getLatLng()); });
+    countSlider .addEventListener('input', () => { countValue.textContent  = countSlider.value; });
+
+    // City search using Nominatim (for centering only)
+    async function searchCity(){
+      const q = cityInput.value.trim(); if(!q){ alert("Please type a city."); return; }
+      try{
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`);
+        const data = await res.json();
+        if(data && data.length>0){ const lat=+data[0].lat, lon=+data[0].lon; setPoint([lat,lon]); lastCityText=q; }
+        else alert("City not found. Click on the map instead.");
+      }catch{ alert("Search failed. Click on the map instead."); }
+    }
+    searchBtn.addEventListener('click', searchCity);
+    cityInput.addEventListener('keydown', e => { if(e.key==='Enter') searchCity(); });
+
+    // ---------- Helpers ----------
+    const randomChoice = arr => arr[Math.floor(Math.random()*arr.length)];
+    const adjectives = ["Happy","Blue","Green","Magic","Urban","Sunny","Mighty","Golden","Silver","Rapid","Clever","True","Bright","Northern","Everest","Rising"];
+    const endings = ["Ltd.","Inc.","Co.","Group","Studio","Works"];
+    function sectorFromTags(tags = {}) {
+      const t = (s) => (s || "").toLowerCase();
+      const shop = t(tags.shop), amen = t(tags.amenity), office = t(tags.office), craft = t(tags.craft),
+            tourism = t(tags.tourism), leisure = t(tags.leisure), healthcare = t(tags.healthcare),
+            industrial = t(tags.industrial), building = t(tags.building);
+      if (["bakery","confectionery","pastry"].includes(shop)) return "Bakery";
+      if (["bicycle"].includes(shop)) return "Bike Shop";
+      if (["books","stationery"].includes(shop)) return "Bookstore";
+      if (["pharmacy"].includes(shop) || amen==="pharmacy" || healthcare) return "Pharmacy";
+      if (["computer","electronics","mobile_phone"].includes(shop)) return "Tech Store";
+      if (["restaurant","fast_food","cafe"].includes(amen)) return "Restaurant";
+      if (["bar","pub","biergarten"].includes(amen)) return "Bar";
+      if (["fitness_centre","gym"].includes(amen)) return "Gym";
+      if (["music","musical_instrument"].includes(shop)) return "Music Shop";
+      if (["clothes","fashion_accessories","shoes"].includes(shop)) return "Clothing";
+      if (craft) return "Workshop";
+      if (tourism) return "Hotel";
+      if (leisure) return "Leisure";
+      if (industrial) return "Industrial";
+      if (["retail","commercial","industrial"].includes(building)) return "Business";
+      if (office) return "Office";
+      return "Business";
+    }
+    function fakeBusinessName(sector){ return `${randomChoice(adjectives)} ${sector} ${randomChoice(endings)}`; }
+    function makeUniqueNameGenerator(){
+      const used=new Set();
+      return function(base){
+        let name=base, i=2;
+        while(used.has(name)){
+          const core = base.replace(/\s+(Ltd\.|Inc\.|Co\.|Group|Studio|Works)$/,'');
+          name = `${core} ${i} ${randomChoice(endings)}`;
+          i++;
+        }
+        used.add(name);
+        return name;
+      };
+    }
+    function toCsv(rows){
+      const esc=v=>{ const s=String(v??""); return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; };
+      return rows.map(r=>r.map(esc).join(",")).join("\n");
+    }
+    function updateStatus(msg){ statusEl.textContent = msg; }
+
+    // ---------- Build Overpass query (ONLY POI with addr:*) ----------
+    function getSelectedTypes(){
+      return Array.from(typeChecks.querySelectorAll("input[type=checkbox]"))
+        .filter(cb => cb.checked).map(cb => cb.value);
+    }
+    function buildOverpassQuery(lat, lon, radiusMeters, selected) {
+      const parts = [];
+      const simpleKeys = ["shop","amenity","office","craft","tourism","leisure","healthcare","industrial"];
+      for (const key of selected) {
+        if (simpleKeys.includes(key)) {
+          // keep only features that already carry an address
+          parts.push(`nwr(around:${Math.floor(radiusMeters)},${lat},${lon})["${key}"]["addr:street"]["addr:housenumber"]`);
+        }
+      }
+      if (selected.includes("building")) {
+        parts.push(`nwr(around:${Math.floor(radiusMeters)},${lat},${lon})["building"~"^(retail|commercial|industrial)$"]["addr:street"]["addr:housenumber"]`);
+      }
+      // if everything is unchecked, fallback to shop with addr
+      if (!parts.length) parts.push(`nwr(around:${Math.floor(radiusMeters)},${lat},${lon})["shop"]["addr:street"]["addr:housenumber"]`);
+
+      return `
+        [out:json][timeout:30];
+        (
+          ${parts.join(";\n")}
+        );
+        out tags center;
+      `;
+    }
+
+    async function overpassFetchWithMirrors(bodyEncoded){
+      let lastErr;
+      for (let i=0;i<OVERPASS_ENDPOINTS.length;i++){
+        const ep = OVERPASS_ENDPOINTS[i];
+        try{
+          const res = await fetch(ep, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+            body: "data=" + bodyEncoded
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const json = await res.json();
+          return json;
+        }catch(e){
+          lastErr = e;
+          // petit backoff progressif
+          await new Promise(r => setTimeout(r, 400 * (i+1)));
+        }
+      }
+      throw lastErr || new Error("All Overpass mirrors failed");
+    }
+
+    async function fetchPois(center, radiusMeters, selectedTypes) {
+      const { lat, lng } = center;
+      const query = buildOverpassQuery(lat, lng, radiusMeters, selectedTypes);
+      const data = await overpassFetchWithMirrors(encodeURIComponent(query));
+      const elements = data.elements || [];
+      return elements.map(el => {
+        const lat = el.lat || (el.center && el.center.lat);
+        const lon = el.lon || (el.center && el.center.lon);
+        const tags = el.tags || {};
+        return (lat && lon) ? { lat, lon, tags } : null;
+      }).filter(Boolean);
+    }
+
+    function sampleArray(arr, n){
+      if (arr.length <= n) return [...arr];
+      const res=[]; const used = new Set();
+      while(res.length<n){
+        const i = Math.floor(Math.random()*arr.length);
+        if(!used.has(i)){ used.add(i); res.push(arr[i]); }
+      }
+      return res;
+    }
+
+    // ---------- Action ----------
+    magicBtn.addEventListener('click', async () => {
+      if (!marker) { alert("Please select a point first (click the map or search a city)."); return; }
+
+      magicBtn.disabled = true;
+      magicBtn.textContent = "Working… 🧠";
+      updateStatus("Querying places with addresses…");
+
+      try {
+        const center = marker.getLatLng();
+        const radiusMeters = kmToMeters(parseInt(radiusSlider.value, 10));
+        const target = parseInt(countSlider.value, 10);
+        const selectedTypes = getSelectedTypes();
+
+        const pois = await fetchPois(center, radiusMeters, selectedTypes);
+        if (!pois.length) {
+          updateStatus("No places with explicit addresses found here.");
+          alert("No places with explicit addresses found. Try a larger radius or different types.");
+          return;
+        }
+
+        const picked = sampleArray(pois, Math.min(target, pois.length));
+        updateStatus(`Found ${pois.length} places. Preparing ${picked.length} addresses…`);
+
+        const uniqueName = makeUniqueNameGenerator();
+        const rows = [["Business Name","Street","Number","Postal Code","City","Latitude","Longitude"]];
+
+        for (const p of picked) {
+          const sector = sectorFromTags(p.tags);
+          const fakeName = uniqueName(fakeBusinessName(sector));
+          const addr = {
+            street: p.tags["addr:street"] || "",
+            number: p.tags["addr:housenumber"] || "",
+            postal: p.tags["addr:postcode"] || "",
+            city:   p.tags["addr:city"] || lastCityText || ""
+          };
+          rows.push([
+            fakeName, addr.street, addr.number, addr.postal, addr.city,
+            (+p.lat).toFixed(6), (+p.lon).toFixed(6)
+          ]);
+        }
+
+        updateStatus("Generating CSV…");
+        const csv = toCsv(rows);
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+        const url  = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = "magic_addresses.csv";
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        updateStatus(`Done. Exported ${rows.length - 1} addresses.`);
+        if (picked.length < target) {
+          alert(`Only ${picked.length} places with full addresses found (requested ${target}). Increase radius or select more types.`);
+        }
+      } catch (err) {
+        console.error(err);
+        updateStatus("Error while fetching addresses.");
+        alert("Overpass seems busy or blocked. Try again, increase radius, or run from a local server (see tip above).");
+      } finally {
+        magicBtn.disabled = false;
+        magicBtn.textContent = "Let's do the magic !";
+      }
+    });
+  </script>
+</body>
+</html>
