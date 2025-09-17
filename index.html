@@ -69,7 +69,7 @@
     </div>
 
     <div class="status" id="status"></div>
-    <div class="hint">Free data: OpenStreetMap via Overpass (multi-mirrors). Only POIs with addr:* (no reverse).</div>
+    <div class="hint">Free data: OpenStreetMap via Overpass (multi-mirrors). Only POIs with addr:*, anonymized names, BE/NL only.</div>
   </div>
 
   <div id="map"></div>
@@ -137,6 +137,131 @@
     searchBtn.addEventListener('click', searchCity);
     cityInput.addEventListener('keydown', e => { if(e.key==='Enter') searchCity(); });
 
+    // ---------- Creative anonymized names (unique & varied) ----------
+    const SUFFIXES = ["Ltd.","Inc.","Co.","Group","Studio","Works","Collective","Company","House","Lab","Atelier"];
+    const ANIMALS  = ["Fox","Bear","Wolf","Otter","Hawk","Sparrow","Raven","Falcon","Deer","Bison","Lynx","Badger","Hare","Bee","Crane","Heron","Seal","Dolphin"];
+    const NUMWORDS = ["Two","Three","Five","Seven","Nine","Twelve","Fifteen","Twenty"];
+    const COLORS   = ["Blue","Green","Crimson","Amber","Ivory","Indigo","Golden","Silver","Copper","Emerald","Azure","Scarlet","Violet","Teal","Cobalt"];
+    const QUALS    = ["Urban","Northern","Grand","Quiet","Happy","Sunny","Clever","Brisk","Rapid","Mighty","Honest","True","Brave","Nimble","Prime"];
+    const LEX = {
+      "Bakery":     { cores:["Loaf","Crust","Oven","Pastry","Brioche","Bagel","Bakehouse","Bun","Mill","Flour","Yeast","Butter","Crumble","Croissant","Cracker"], ends:["Bakery","Bakehouse","Patisserie"] },
+      "Bike Shop":  { cores:["Cycle","Wheel","Spoke","Chain","Sprocket","Pedal","Frame","Saddle","Gear","Gravel","Hub","Trail","Fixie","Velodrome","Cruiser"], ends:["Cycles","Bicycles","Bike Co."] },
+      "Bookstore":  { cores:["Page","Chapter","Quill","Scroll","Library","Archive","Tome","Novel","Fable","Ink","Bookmark","Shelf","Edition","Folio","Volume"], ends:["Books","Bookshop","Press"] },
+      "Pharmacy":   { cores:["Health","Remedy","Cure","Vial","Herb","Pill","Care","Vital","Wellness","Apothecary","Ointment","Serum","Dose","Clinic"], ends:["Pharmacy","Apothecary","Health"] },
+      "Tech Store": { cores:["Pixel","Circuit","Quantum","Logic","Byte","Chip","Matrix","Vector","Nova","Photon","Cloud","Kernel","Module"], ends:["Labs","Tech","Systems"] },
+      "Restaurant": { cores:["Fork","Skillet","Grill","Flame","Garden","Olive","Basil","Harvest","Pantry","Table","Spice","Smoke","Ember"], ends:["Kitchen","Bistro","Table"] },
+      "Bar":        { cores:["Taproom","Barrel","Malt","Hop","Cask","Cellar","Stout","Ale","Wine","Tavern","Moon","Oak","Spirit","Lime","Salt"], ends:["Bar","Tavern","Club"] },
+      "Gym":        { cores:["Muscle","Core","Pulse","Sprint","Power","Iron","Fit","Motion","Tempo","Zen","Focus","Arena","Peak","Summit"], ends:["Gym","Fitness","Athletics"] },
+      "Music Shop": { cores:["Note","Chord","Melody","Rhythm","Groove","Harmony","Lyric","Tempo","Beat","Record","Vinyl","Guitar","Piano","Drum"], ends:["Music","Records","Sound"] },
+      "Clothing":   { cores:["Thread","Loom","Needle","Silk","Denim","Wool","Cotton","Wardrobe","Closet","Button","Pattern","Tailor","Stitch","Hem","Lace"], ends:["Apparel","Outfitters","Clothiers"] },
+      "Workshop":   { cores:["Workbench","Anvil","Forge","Hammer","Lathe","Chisel","Timber","Joinery","Resin","Fiber","Craft","Toolbox","Bench"], ends:["Works","Atelier","Fabrication"] },
+      "Hotel":      { cores:["Harbor","Vista","Garden","Cedar","Maple","Riverside","Lakeside","Hilltop","Crescent","Orchid","Aurora","Lagoon","Beacon","Lodge"], ends:["Hotel","Inn","Suites"] },
+      "Leisure":    { cores:["Arcade","Arena","Park","Playhouse","Meadow","Pavilion","Carousel","Bowling","Cinema","Skate","Rink","Lagoon","Pier"], ends:["Leisure","Center","Park"] },
+      "Industrial": { cores:["Steel","Foundry","Alloy","Forge","Engine","Turbine","Assembly","Depot","Granite","Atlas","Crane","Anchor"], ends:["Industries","Works","Plant"] },
+      "Office":     { cores:["Summit","Bridge","Harbor","Axis","Vista","Prime","Union","Pioneer","Anchor","Beacon","Sterling"], ends:["Office","Partners","Group"] },
+      "Business":   { cores:["Corner","Market","Square","Union","Central","Prime","Anchor","Bridge","Compass","Atlas","Pioneer","Crown","Crescent"], ends:["Company","Group","Co."] }
+    };
+    const NAME_POOLS = {};
+    function pick(a){ return a[Math.floor(Math.random()*a.length)]; }
+    function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
+    function generatePool(sector, target=100){
+      const spec = LEX[sector] || LEX["Business"];
+      const out = new Set();
+      while(out.size < target){
+        const form = Math.floor(Math.random()*6);
+        const adj = pick([...COLORS, ...QUALS]);
+        const animal = pick(ANIMALS);
+        const c1 = pick(spec.cores);
+        const c2 = pick(spec.cores.filter(x => x!==c1));
+        const end = pick(spec.ends);
+        const num = pick(NUMWORDS);
+        let name = "";
+        switch(form){
+          case 0: name = `${adj} ${c1} ${end}`; break;
+          case 1: name = `${animal} ${c1} ${end}`; break;
+          case 2: name = `${num} ${c1} ${end}`; break;
+          case 3: name = `${c1} & ${c2} ${end}`; break;
+          case 4: name = `${adj} ${animal} ${c1} ${end}`; break;
+          case 5: name = `${c1} ${adj} ${end}`; break;
+        }
+        out.add(name.trim());
+      }
+      return shuffle([...out]);
+    }
+    function getPool(sector){
+      if(!NAME_POOLS[sector]) NAME_POOLS[sector] = generatePool(sector, 100);
+      return NAME_POOLS[sector];
+    }
+    function makeUniqueNameDispenser(){
+      const used = new Set();
+      return function next(sector){
+        const pool = getPool(sector);
+        while(pool.length){
+          const n = pool.pop();
+          if(!used.has(n)){ used.add(n); return n; }
+        }
+        // fallback if pool exhausted
+        let base = `${pick(COLORS)} ${pick((LEX[sector]||LEX["Business"]).cores)} ${pick((LEX[sector]||LEX["Business"]).ends)}`;
+        let i=2, cand=base;
+        while(used.has(cand)){ cand = `${base} ${i} ${pick(SUFFIXES)}`; i++; }
+        used.add(cand); return cand;
+      };
+    }
+    const nextCreativeName = makeUniqueNameDispenser();
+
+    // ---------- Country filter (BE & NL only) ----------
+    function normCountryTag(tags){
+      const raw = (tags["addr:country"] || tags["is_in:country_code"] || tags["country_code"] || tags["country"] || "").toString().trim().toUpperCase();
+      if (["BE","BEL","BELGIUM"].includes(raw)) return "BE";
+      if (["NL","NLD","NETHERLANDS","NEDERLAND"].includes(raw)) return "NL";
+      return "";
+    }
+    function inBelgiumBBox(lat, lon){ return lat>=49.45 && lat<=51.55 && lon>=2.5 && lon<=6.45; }
+    function inNetherlandsBBox(lat, lon){ return lat>=50.70 && lat<=53.70 && lon>=3.20 && lon<=7.25; }
+    function guessCountryFromPostcodeAndPos(postcode, lat, lon){
+      const pc = (postcode||"").toString().trim().toUpperCase();
+      const isNL = /^[1-9][0-9]{3}\s?[A-Z]{2}$/.test(pc);     // e.g., 1012AB or 1012 AB
+      const isBE = /^[1-9][0-9]{3}$/.test(pc);                // 1000–9999
+      if (isNL) return "NL";
+      if (isBE) return "BE";
+      // fallback by position if within bbox
+      if (inBelgiumBBox(lat,lon)) return "BE";
+      if (inNetherlandsBBox(lat,lon)) return "NL";
+      return "";
+    }
+    function isAllowedCountry(lat, lon, tags){
+      const tag = normCountryTag(tags);
+      if (tag==="BE" || tag==="NL") return true;
+      const pc = tags["addr:postcode"];
+      const g = guessCountryFromPostcodeAndPos(pc, lat, lon);
+      return g==="BE" || g==="NL";
+    }
+
+    // ---------- City extraction (robuste, multilingue, sans fallback forcé) ----------
+    function firstNonEmpty(tags, keys){
+      for (const k of keys){
+        const v = tags[k];
+        if (v && String(v).trim()) return String(v).trim();
+      }
+      return "";
+    }
+    function multiLangKeys(base){
+      const langs = ["fr","nl","de","en"];
+      return [base, ...langs.map(l => `${base}:${l}`)];
+    }
+    function getCityFromTags(tags){
+      // Prefer municipality-level fields
+      const candidates = [
+        ...multiLangKeys("addr:city"),
+        ...multiLangKeys("addr:town"),
+        ...multiLangKeys("addr:village"),
+        ...multiLangKeys("addr:municipality"),
+        "addr:suburb","addr:hamlet","addr:place",
+        "is_in:city","is_in:town","is_in:municipality"
+      ];
+      return firstNonEmpty(tags, candidates);
+    }
+
     // --- CSV helper
     function toCsv(rows){
       const esc=v=>{ const s=String(v??""); return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; };
@@ -144,12 +269,11 @@
     }
     function updateStatus(msg){ statusEl.textContent = msg; }
 
-    // --- Build & run Overpass queries with LIMIT + EARLY-STOP ---------------
+    // --- Build & run Overpass queries (LIMIT + EARLY-STOP) ---
     function getSelectedTypes(){
       return Array.from(typeChecks.querySelectorAll("input[type=checkbox]"))
         .filter(cb => cb.checked).map(cb => cb.value);
     }
-
     function queryForKey(lat, lon, radiusMeters, key, limit){
       const R = Math.floor(radiusMeters);
       const LIM = Math.max(1, Math.min(300, limit|0));
@@ -170,18 +294,13 @@
         out tags center qt ${LIM};
       `;
     }
-
     async function overpassCall(query){
       const body = "data=" + encodeURIComponent(query);
       let lastErr;
       for (let i=0;i<OVERPASS_ENDPOINTS.length;i++){
         const ep = OVERPASS_ENDPOINTS[i];
         try{
-          const res = await fetch(ep, {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-            body
-          });
+          const res = await fetch(ep, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" }, body });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           return await res.json();
         }catch(e){
@@ -191,7 +310,6 @@
       }
       throw lastErr || new Error("All Overpass mirrors failed");
     }
-
     async function fetchPois(center, radiusMeters, selectedTypes, target){
       const { lat, lng } = center;
       const results = [];
@@ -212,10 +330,21 @@
             const y = el.lat || el.center?.lat;
             const x = el.lon || el.center?.lon;
             if (!y || !x) continue;
+
             const id = `${el.type || 'x'}:${el.id || 'x'}`;
             if (seen.has(id)) continue;
+
+            const tags = el.tags || {};
+            if (!isAllowedCountry(y, x, tags)) continue; // 🇧🇪🇳🇱 only
+
+            const street = tags["addr:street"] || "";
+            const number = tags["addr:housenumber"] || "";
+            const postal = tags["addr:postcode"] || "";
+            // require street & number; postal optional
+            if (!street || !number) continue;
+
             seen.add(id);
-            results.push({ lat: y, lon: x, tags: el.tags || {} });
+            results.push({ lat: y, lon: x, tags });
             updateStatus(`Collected ${results.length} / ${target}…`);
             if (results.length >= target) return results; // early stop
           }
@@ -227,7 +356,37 @@
       return results;
     }
 
-    // --- Main action --------------------------------------------------------
+    // --- Sector from tags (for anonymized name category) ---
+    function sectorFromTags(tags = {}) {
+      const t = (s) => (s || "").toLowerCase();
+      const shop = t(tags.shop), amen = t(tags.amenity), office = t(tags.office), craft = t(tags.craft),
+            tourism = t(tags.tourism), leisure = t(tags.leisure), healthcare = t(tags.healthcare),
+            industrial = t(tags.industrial), building = t(tags.building);
+      if (["bakery","confectionery","pastry"].includes(shop)) return "Bakery";
+      if (["bicycle"].includes(shop)) return "Bike Shop";
+      if (["books","stationery"].includes(shop)) return "Bookstore";
+      if (["pharmacy"].includes(shop) || amen==="pharmacy" || healthcare) return "Pharmacy";
+      if (["computer","electronics","mobile_phone"].includes(shop)) return "Tech Store";
+      if (["restaurant","fast_food","cafe"].includes(amen)) return "Restaurant";
+      if (["bar","pub","biergarten"].includes(amen)) return "Bar";
+      if (["fitness_centre","gym"].includes(amen)) return "Gym";
+      if (["music","musical_instrument"].includes(shop)) return "Music Shop";
+      if (["clothes","fashion_accessories","shoes"].includes(shop)) return "Clothing";
+      if (craft) return "Workshop";
+      if (tourism) return "Hotel";
+      if (leisure) return "Leisure";
+      if (industrial) return "Industrial";
+      if (["retail","commercial","industrial"].includes(building)) return "Business";
+      if (office) return "Office";
+      return "Business";
+    }
+
+    // --- Main action (CSV: anonymized Name + address only) ---
+    function toCsv(rows){
+      const esc=v=>{ const s=String(v??""); return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; };
+      return rows.map(r=>r.map(esc).join(",")).join("\n");
+    }
+
     magicBtn.addEventListener('click', async () => {
       if (!marker) { alert("Please select a point first (click the map or search a city)."); return; }
 
@@ -244,21 +403,23 @@
         const source = await fetchPois(center, radiusMeters, selectedTypes, target);
 
         if (!source.length) {
-          updateStatus("No places with explicit addresses found here.");
-          alert("No places with explicit addresses found. Try a larger radius or different types.");
+          updateStatus("No BE/NL places with explicit addresses found here.");
+          alert("No places found (BE/NL with full addresses). Try a larger radius or different types.");
           return;
         }
 
-        // Build CSV (Name + address only)
-        const rows = [["Name","Street","Number","Postal Code","City"]];
+        const rows = [["Business Name","Street","Number","Postal Code","City"]];
         for (const p of source.slice(0, target)) {
           const tags = p.tags || {};
-          const name = tags.name || tags.brand || "Unknown";
+          const sector = sectorFromTags(tags);
+          const fakeName = nextCreativeName(sector);
+
           const street = tags["addr:street"] || "";
           const number = tags["addr:housenumber"] || "";
           const postal = tags["addr:postcode"] || "";
-          const city   = tags["addr:city"] || lastCityText || "";
-          rows.push([name, street, number, postal, city]);
+          const city   = getCityFromTags(tags); // robust, multilanguage
+
+          rows.push([fakeName, street, number, postal, city]);
         }
 
         const csv = toCsv(rows);
@@ -271,7 +432,7 @@
 
         updateStatus(`Done. Exported ${rows.length - 1} addresses.`);
         if (source.length < target) {
-          alert(`Only ${source.length} places with full addresses found (requested ${target}). Increase radius or select more types.`);
+          alert(`Only ${source.length} addresses found within BE/NL (requested ${target}). Increase radius or select more types.`);
         }
 
       } catch (err) {
