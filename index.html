@@ -47,7 +47,6 @@
     <div class="row wrap">
       <span class="section-title">Types:</span>
       <div class="checkboxes" id="typeChecks">
-        <!-- All checked by default -->
         <label><input type="checkbox" value="shop" checked />shop</label>
         <label><input type="checkbox" value="amenity" checked />amenity</label>
         <label><input type="checkbox" value="office" checked />office</label>
@@ -65,14 +64,14 @@
     </div>
 
     <div class="status" id="status"></div>
-    <div class="hint">Free data: OpenStreetMap via Overpass (multi-mirrors). We only use POIs that already have addr:*, no reverse geocoding.</div>
+    <div class="hint">Free data: OpenStreetMap via Overpass (multi-mirrors). Only POIs with addr:* (no reverse).</div>
   </div>
 
   <div id="map"></div>
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script>
-    // ---------- Overpass mirrors (rotated on failure) ----------
+    // --- Overpass mirrors ---
     const OVERPASS_ENDPOINTS = [
       "https://overpass.kumi.systems/api/interpreter",
       "https://overpass-api.de/api/interpreter",
@@ -81,13 +80,11 @@
       "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
     ];
 
-    // ---------- Map init ----------
-    const map = L.map('map').setView([50.85, 4.35], 6); // Brussels default
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap contributors'
-    }).addTo(map);
+    // --- Map init ---
+    const map = L.map('map').setView([50.85, 4.35], 6);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }).addTo(map);
 
-    let marker = null, circle = null, lastCityText = "";
+    let marker = null, circle = null, lastCityText = "", cancelRun = false;
 
     const cityInput   = document.getElementById('cityInput');
     const searchBtn   = document.getElementById('searchBtn');
@@ -112,7 +109,7 @@
     radiusSlider.addEventListener('input', () => { radiusValue.textContent = radiusSlider.value; if (marker) drawCircle(marker.getLatLng()); });
     countSlider .addEventListener('input', () => { countValue.textContent  = countSlider.value; });
 
-    // City search using Nominatim (for centering only)
+    // City search just for centering
     async function searchCity(){
       const q = cityInput.value.trim(); if(!q){ alert("Please type a city."); return; }
       try{
@@ -125,7 +122,7 @@
     searchBtn.addEventListener('click', searchCity);
     cityInput.addEventListener('keydown', e => { if(e.key==='Enter') searchCity(); });
 
-    // ---------- Helpers ----------
+    // --- Helpers ---
     const randomChoice = arr => arr[Math.floor(Math.random()*arr.length)];
     const adjectives = ["Happy","Blue","Green","Magic","Urban","Sunny","Mighty","Golden","Silver","Rapid","Clever","True","Bright","Northern","Everest","Rising"];
     const endings = ["Ltd.","Inc.","Co.","Group","Studio","Works"];
@@ -172,22 +169,22 @@
     }
     function updateStatus(msg){ statusEl.textContent = msg; }
 
-    // ---------- Build & run Overpass queries (ONLY with addr:*) ----------
+    // --- Build & run Overpass queries with LIMIT and EARLY-STOP ---
     function getSelectedTypes(){
       return Array.from(typeChecks.querySelectorAll("input[type=checkbox]"))
         .filter(cb => cb.checked).map(cb => cb.value);
     }
 
-    // One-key query (shop/amenity/office/..., or building with regex)
-    function queryForKey(lat, lon, radiusMeters, key){
+    function queryForKey(lat, lon, radiusMeters, key, limit){
       const R = Math.floor(radiusMeters);
+      const LIM = Math.max(1, Math.min(300, limit|0)); // cap per query
       if (key === "building") {
         return `
           [out:json][timeout:60];
           (
             nwr(around:${R},${lat},${lon})["building"~"^(retail|commercial|industrial)$"]["addr:street"]["addr:housenumber"];
           );
-          out tags center qt;
+          out tags center qt ${LIM};
         `;
       }
       return `
@@ -195,7 +192,7 @@
         (
           nwr(around:${R},${lat},${lon})["${key}"]["addr:street"]["addr:housenumber"];
         );
-        out tags center qt;
+        out tags center qt ${LIM};
       `;
     }
 
@@ -214,30 +211,35 @@
           return await res.json();
         }catch(e){
           lastErr = e;
-          // progressive backoff between mirrors
           await new Promise(r => setTimeout(r, 500 * (i+1)));
         }
       }
       throw lastErr || new Error("All Overpass mirrors failed");
     }
 
-    // Fetch sequentially by key; stop early when we have enough
-    async function fetchPois(center, radiusMeters, selectedTypes, target=200){
+    // Sequential per key; per-request LIMIT = remaining*2; stop as soon as enough
+    async function fetchPois(center, radiusMeters, selectedTypes, target){
       const { lat, lng } = center;
       const results = [];
       const seen = new Set();
 
-      // Keys in a productive order
       const order = ["shop","amenity","office","building","craft","leisure","tourism","healthcare","industrial"];
       const keys = order.filter(k => selectedTypes.includes(k)).concat(
         selectedTypes.filter(k => !order.includes(k))
       );
 
       for (const key of keys){
-        const q = queryForKey(lat, lng, radiusMeters, key);
+        if (cancelRun) break;
+        const remaining = Math.max(0, target - results.length);
+        if (remaining === 0) break;
+
+        const limit = Math.min(remaining * 2, 300);
+        const q = queryForKey(lat, lng, radiusMeters, key, limit);
+
         try{
           const data = await overpassCall(q);
           for (const el of (data.elements || [])){
+            if (cancelRun) break;
             const y = el.lat || el.center?.lat;
             const x = el.lon || el.center?.lon;
             if (!y || !x) continue;
@@ -245,13 +247,14 @@
             if (seen.has(id)) continue;
             seen.add(id);
             results.push({ lat: y, lon: x, tags: el.tags || {} });
-            if (results.length >= target) return results;
+            updateStatus(`Collected ${results.length} / ${target}…`);
+            if (results.length >= target) return results; // EARLY STOP
           }
         }catch(e){
           console.warn("Overpass error on key", key, e);
         }
-        // small pause between keys to be nice with servers
-        await new Promise(r => setTimeout(r, 300));
+        // petite pause entre clés
+        await new Promise(r => setTimeout(r, 250));
       }
       return results;
     }
@@ -266,10 +269,11 @@
       return res;
     }
 
-    // ---------- Main action ----------
+    // --- Main action ---
     magicBtn.addEventListener('click', async () => {
       if (!marker) { alert("Please select a point first (click the map or search a city)."); return; }
 
+      cancelRun = false;
       magicBtn.disabled = true;
       magicBtn.textContent = "Working… 🧠";
       updateStatus("Querying places with addresses…");
@@ -280,7 +284,6 @@
         const target = parseInt(countSlider.value, 10);
         const selectedTypes = getSelectedTypes();
 
-        // 1) Fetch POIs (sequential per key, stop early)
         const source = await fetchPois(center, radiusMeters, selectedTypes, target);
 
         if (!source.length) {
@@ -289,11 +292,9 @@
           return;
         }
 
-        // 2) If more than needed (can happen), sample down
         const picked = sampleArray(source, Math.min(target, source.length));
-        updateStatus(`Found ${source.length} places. Preparing ${picked.length} addresses…`);
+        updateStatus(`Preparing ${picked.length} addresses…`);
 
-        // 3) Build CSV with unique fake names
         const uniqueName = makeUniqueNameGenerator();
         const rows = [["Business Name","Street","Number","Postal Code","City","Latitude","Longitude"]];
 
@@ -312,8 +313,6 @@
           ]);
         }
 
-        // 4) Download CSV
-        updateStatus("Generating CSV…");
         const csv = toCsv(rows);
         const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
         const url  = URL.createObjectURL(blob);
@@ -334,6 +333,7 @@
       } finally {
         magicBtn.disabled = false;
         magicBtn.textContent = "Let's do the magic !";
+        cancelRun = false;
       }
     });
   </script>
